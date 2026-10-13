@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
-Description: |
-  Root CloudFormation template for Global Accelerator-Based Multi-Region Failover on AWS. Creates the following nested stacks:
+Description: >
+  Root CloudFormation template for Global Accelerator-Based Multi-Region Failover on AWS. Creates:
     - VPC A (CIDR from VPCACidrBlock) with DNS hostnames enabled and an attached Internet Gateway
     - 2 public subnets (us-east-1a, us-east-1b) in VPC A sharing a route table with a default route to the Internet Gateway
 
