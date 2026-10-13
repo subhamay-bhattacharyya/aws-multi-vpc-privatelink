@@ -27,4 +27,4 @@
 - [ ] Application Load Balancer
 - [ ] RDS Database
 - [ ] EC2 instances with the application
-
+- [ ] VPC Quota increase.
