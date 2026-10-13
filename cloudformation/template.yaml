@@ -1,59 +1,592 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
-Description: 'Nested CloudFormation template to create an S3 bucket with versioning and public access blocking'
+Description: |
+  Root CloudFormation template for Global Accelerator-Based Multi-Region Failover on AWS. Creates the following nested stacks:
+    - VPC A (CIDR from VPCACidrBlock) with DNS hostnames enabled and an attached Internet Gateway
+    - 2 public subnets (us-east-1a, us-east-1b) in VPC A sharing a route table with a default route to the Internet Gateway
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Project Configuration"
+        Parameters:
+          - ProjectName
+          - Environment
+      - Label:
+          default: "Nested Stack Configuration"
+        Parameters:
+          - NestedStacksS3BucketName
+      # - Label:
+      #     default: "KMS Encryption"
+      #   Parameters:
+      #     - KmsKey
+      - Label:
+          default: "VPC Configuration"
+        Parameters:
+          - VPCCidrBlockA
+          - VPCCidrBlockB
+          - VPCCidrBlockC
+      - Label:
+          default: "Subnet Configuration"
+        Parameters:
+          - PublicSubnetCidrBlocksVPCA
+          - PublicSubnetCidrBlocksVPCB
+          - PublicSubnetCidrBlocksVPCC
+          - PrivateSubnetCidrBlocksVPCA
+          - PrivateSubnetCidrBlocksVPCB
+          - PrivateSubnetCidrBlocksVPCC
+          - SubnetAvailabilityZones
+      - Label:
+          default: "Advanced Configuration"
+        Parameters:
+          - CiSuffix
+    ParameterLabels:
+      NestedStacksS3BucketName:
+        default: "S3 Bucket Name"
+      # KmsKey:
+      #   default: "KMS Key (ARN / Alias)"
+      ProjectName:
+        default: "Project Name"
+      Environment:
+        default: "Environment"
+      VPCCidrBlockA:
+        default: "VPC A CIDR block (e.g., 10.0.0.0/16)"
+      VPCCidrBlockB:
+        default: "VPC B CIDR block (e.g., 10.0.0.0/16)"
+      VPCCidrBlockC:
+        default: "VPC C CIDR block (e.g., 10.0.0.0/16)"
+      PublicSubnetCidrBlocksVPCA:
+        default: "VPC A public subnet CIDR blocks (comma-separated)"
+      PublicSubnetCidrBlocksVPCB:
+        default: "VPC B public subnet CIDR blocks (comma-separated)"
+      PublicSubnetCidrBlocksVPCC:
+        default: "VPC C public subnet CIDR blocks (comma-separated)"
+      PrivateSubnetCidrBlocksVPCA:
+        default: "VPC A private subnet CIDR blocks (comma-separated)"
+      PrivateSubnetCidrBlocksVPCB:
+        default: "VPC B private subnet CIDR blocks (comma-separated)"
+      PrivateSubnetCidrBlocksVPCC:
+        default: "VPC C private subnet CIDR blocks (comma-separated)"
+      SubnetAvailabilityZones:
+        default: "Subnet Availability Zones (comma-separated)"
+      CiSuffix:
+        default: "CI Suffix"
 
 Parameters:
+  NestedStacksS3BucketName:
+    Type: String
+    Default: "subhamay-cfn-templates-bucket-270453428528-us-east-1"
+    Description: "S3 bucket name where the nested CloudFormation template is stored"
+    MinLength: 3
+    MaxLength: 63
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+    ConstraintDescription: "S3 bucket name must be 3-63 characters, start and end with lowercase letter or number, and can contain hyphens and dots"
+
   ProjectName:
     Type: String
+    Default: "proj-ztc"
     Description: "Project name to use as a bucket prefix"
     MinLength: 1
     MaxLength: 20
     AllowedPattern: "^[a-z0-9-]+$"
     ConstraintDescription: "Project name must be lowercase letters, numbers, and hyphens only"
 
-  BucketBaseName:
-    Type: String
-    Default: cfn-bucket
-    Description: Base name for the S3 bucket (account ID, environment, and region will be appended)
+  # KmsKey:
+  #   Type: String
+  #   Default: "SB-KMS"
+  #   AllowedPattern: "^(alias/[a-zA-Z0-9_-]+|arn:aws:kms:[a-z0-9-]+:[0-9]+:key/[a-zA-Z0-9-]+|[a-zA-Z0-9_-]+)?$"
+  #   ConstraintDescription: "KMS Key can be a key name (e.g., my-key, auto-converted to alias/my-key), a KMS key alias (e.g., alias/my-key), or a full KMS key ARN (e.g., arn:aws:kms:region:account:key/key-id), or leave empty for no KMS encryption"
+  #   Description: "Optional KMS Key for S3 bucket encryption. Accepts: key name (my-key), alias (alias/my-key), or ARN (arn:aws:kms:region:account:key/key-id). Plain key names are auto-converted to aliases."
 
-  environment:
+  Environment:
     Type: String
     Default: devl
     Description: "Deployment environment for the S3 bucket"
 
+  VPCCidrBlockA:
+    Type: String
+    Default: '10.6.0.0/16'
+    Description: CIDR block for VPC A (e.g., 10.0.0.0/16)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be valid CIDR block
+
+  VPCCidrBlockB:
+    Type: String
+    Default: '10.7.0.0/16'
+    Description: CIDR block for VPC B (e.g., 10.0.0.0/16)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be valid CIDR block
+
+  VPCCidrBlockC:
+    Type: String
+    Default: '10.8.0.0/16'
+    Description: CIDR block for VPC C (e.g., 10.0.0.0/16)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be valid CIDR block
+
+  PublicSubnetCidrBlocksVPCA:
+    Type: String
+    Default: '10.6.0.0/20,10.6.16.0/20'
+    Description: Comma-separated public subnet CIDR blocks for VPC A (e.g., 10.6.0.0/20,10.6.16.0/20)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}(\s*,\s*(\d{1,3}\.){3}\d{1,3}/\d{1,2})*$'
+    ConstraintDescription: Must be a comma-separated list of valid CIDR blocks
+
+  PublicSubnetCidrBlocksVPCB:
+    Type: String
+    Default: '10.7.0.0/20,10.7.16.0/20'
+    Description: Comma-separated public subnet CIDR blocks for VPC B (e.g., 10.7.0.0/20,10.7.16.0/20)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}(\s*,\s*(\d{1,3}\.){3}\d{1,3}/\d{1,2})*$'
+    ConstraintDescription: Must be a comma-separated list of valid CIDR blocks
+
+  PublicSubnetCidrBlocksVPCC:
+    Type: String
+    Default: '10.8.0.0/20,10.8.16.0/20'
+    Description: Comma-separated public subnet CIDR blocks for VPC C (e.g., 10.8.0.0/20,10.8.16.0/20)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}(\s*,\s*(\d{1,3}\.){3}\d{1,3}/\d{1,2})*$'
+    ConstraintDescription: Must be a comma-separated list of valid CIDR blocks
+
+  PrivateSubnetCidrBlocksVPCA:
+    Type: String
+    Default: '10.6.32.0/20,10.6.48.0/20'
+    Description: Comma-separated private subnet CIDR blocks for VPC A (e.g., 10.6.32.0/20,10.6.48.0/20)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}(\s*,\s*(\d{1,3}\.){3}\d{1,3}/\d{1,2})*$'
+    ConstraintDescription: Must be a comma-separated list of valid CIDR blocks
+
+  PrivateSubnetCidrBlocksVPCB:
+    Type: String
+    Default: '10.7.32.0/20,10.7.48.0/20'
+    Description: Comma-separated private subnet CIDR blocks for VPC B (e.g., 10.7.32.0/20,10.7.48.0/20)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}(\s*,\s*(\d{1,3}\.){3}\d{1,3}/\d{1,2})*$'
+    ConstraintDescription: Must be a comma-separated list of valid CIDR blocks
+
+  PrivateSubnetCidrBlocksVPCC:
+    Type: String
+    Default: '10.8.32.0/20,10.8.48.0/20'
+    Description: Comma-separated private subnet CIDR blocks for VPC C (e.g., 10.8.32.0/20,10.8.48.0/20)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}(\s*,\s*(\d{1,3}\.){3}\d{1,3}/\d{1,2})*$'
+    ConstraintDescription: Must be a comma-separated list of valid CIDR blocks
+
+  SubnetAvailabilityZones:
+    Type: CommaDelimitedList
+    Default: "us-east-1a,us-east-1b"
+    Description: "Comma-separated Availability Zones for the subnets (e.g., us-east-1a,us-east-1b)"
+
   CiSuffix:
     Type: String
     Default: ""
-    Description: "Optional CI prefix to append to the bucket name"
+    Description: "Optional CI suffix to append to the bucket name"
 
 Conditions:
+  # HasKmsKey: !Not [!Equals [!Ref KmsKey, ""]]
   HasCiSuffix: !Not [!Equals [!Ref CiSuffix, ""]]
 
 Resources:
-  S3Bucket:
-    Type: AWS::S3::Bucket
+
+
+  ######################################
+  # VPC A Nested Stack
+  ######################################
+  VpcANestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested VPC CloudFormation template to create the core networking VPC with DNS support and an attached Internet Gateway; all subnets, route tables, and gateways attach to this VPC"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
     Properties:
-      BucketName: !If
-        - HasCiSuffix
-        - !Sub '${ProjectName}-${BucketBaseName}-${AWS::AccountId}-${environment}-${AWS::Region}-${CiSuffix}'
-        - !Sub '${ProjectName}-${BucketBaseName}-${AWS::AccountId}-${environment}-${AWS::Region}'
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-vpc/template.yaml"
+      Parameters:
+          VPCCidrBlock: !Ref VPCCidrBlockA
+          EnableDnsHostnames: "true"
+          EnableInternetGateway: "true"
+          VpcNameTag: !If
+            - HasCiSuffix
+            - !Sub "${ProjectName}-vpc-a-${Environment}-${CiSuffix}"
+            - !Sub "${ProjectName}-vpc-a-${Environment}"
+          Environment: !Ref Environment
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Global Multi-Region VPC-A"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  ######################################
+  # VPC A Public Subnets Nested Stack
+  ######################################
+  PublicSubnetsVpcANestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested subnets CloudFormation template to create two public subnets in the VPC created by the VPC nested stack, sharing a route table with a default route to the Internet Gateway"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+          - "VpcANestedStack must complete first so that the VPC and Internet Gateway IDs are available"
+    Properties:
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-subnets/template.yaml"
+      Parameters:
+        VpcId: !GetAtt VpcANestedStack.Outputs.VPCId
+        VpcName: !If
+          - HasCiSuffix
+          - !Sub "${ProjectName}-vpc-a-${Environment}-${CiSuffix}"
+          - !Sub "${ProjectName}-vpc-a-${Environment}"
+        AvailabilityZones: !Ref SubnetAvailabilityZones
+        SubnetCidrBlocks: !Ref PublicSubnetCidrBlocksVPCA
+        SubnetCount: "2"
+        SubnetQualifier: "public"
+        InternetGatewayId: !GetAtt VpcANestedStack.Outputs.InternetGatewayId
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Global Multi-Region VPC-A Public Subnets"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  ######################################
+  # VPC A Private Subnets Nested Stack
+  ######################################
+  PrivateSubnetsVpcANestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested subnets CloudFormation template to create two private subnets in the VPC created by the VPC nested stack; private subnets are not associated with the Internet Gateway"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+          - "VpcANestedStack must complete first so that the VPC ID is available"
+    Properties:
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-subnets/template.yaml"
+      Parameters:
+        VpcId: !GetAtt VpcANestedStack.Outputs.VPCId
+        VpcName: !If
+          - HasCiSuffix
+          - !Sub "${ProjectName}-vpc-a-${Environment}-${CiSuffix}"
+          - !Sub "${ProjectName}-vpc-a-${Environment}"
+        AvailabilityZones: !Ref SubnetAvailabilityZones
+        SubnetCidrBlocks: !Ref PrivateSubnetCidrBlocksVPCA
+        SubnetCount: "2"
+        SubnetQualifier: "private"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Global Multi-Region VPC-A Private Subnets"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  ######################################
+  # VPC B Nested Stack
+  ######################################
+  VpcBNestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested VPC CloudFormation template to create the core networking VPC with DNS support and an attached Internet Gateway; all subnets, route tables, and gateways attach to this VPC"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+    Properties:
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-vpc/template.yaml"
+      Parameters:
+          VPCCidrBlock: !Ref VPCCidrBlockB
+          EnableDnsHostnames: "true"
+          EnableInternetGateway: "true"
+          VpcNameTag: !If
+            - HasCiSuffix
+            - !Sub "${ProjectName}-vpc-b-${Environment}-${CiSuffix}"
+            - !Sub "${ProjectName}-vpc-b-${Environment}"
+          Environment: !Ref Environment
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Global Multi-Region VPC-B"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  ######################################
+  # VPC B Public Subnets Nested Stack
+  ######################################
+  PublicSubnetsVpcBNestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested subnets CloudFormation template to create two public subnets in the VPC created by the VPC nested stack, sharing a route table with a default route to the Internet Gateway"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+          - "VpcBNestedStack must complete first so that the VPC and Internet Gateway IDs are available"
+    Properties:
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-subnets/template.yaml"
+      Parameters:
+        VpcId: !GetAtt VpcBNestedStack.Outputs.VPCId
+        VpcName: !If
+          - HasCiSuffix
+          - !Sub "${ProjectName}-vpc-b-${Environment}-${CiSuffix}"
+          - !Sub "${ProjectName}-vpc-b-${Environment}"
+        AvailabilityZones: !Ref SubnetAvailabilityZones
+        SubnetCidrBlocks: !Ref PublicSubnetCidrBlocksVPCB
+        SubnetCount: "2"
+        SubnetQualifier: "public"
+        InternetGatewayId: !GetAtt VpcBNestedStack.Outputs.InternetGatewayId
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Multi-VPC Private Link VPC-B Public Subnets"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  ######################################
+  # VPC B Private Subnets Nested Stack
+  ######################################
+
+  PrivateSubnetsVpcBNestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested subnets CloudFormation template to create two private subnets in the VPC created by the VPC nested stack; private subnets are not associated with the Internet Gateway"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+          - "VpcBNestedStack must complete first so that the VPC ID is available"
+    Properties:
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-subnets/template.yaml"
+      Parameters:
+        VpcId: !GetAtt VpcBNestedStack.Outputs.VPCId
+        VpcName: !If
+          - HasCiSuffix
+          - !Sub "${ProjectName}-vpc-b-${Environment}-${CiSuffix}"
+          - !Sub "${ProjectName}-vpc-b-${Environment}"
+        AvailabilityZones: !Ref SubnetAvailabilityZones
+        SubnetCidrBlocks: !Ref PrivateSubnetCidrBlocksVPCB
+        SubnetCount: "2"
+        SubnetQualifier: "private"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Multi-VPC Private Link VPC-B Private Subnets"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  ######################################
+  # VPC C Nested Stack
+  ######################################
+
+  VpcCNestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested VPC CloudFormation template to create the core networking VPC with DNS support and an attached Internet Gateway; all subnets, route tables, and gateways attach to this VPC"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+    Properties:
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-vpc/template.yaml"
+      Parameters:
+          VPCCidrBlock: !Ref VPCCidrBlockC
+          EnableDnsHostnames: "true"
+          EnableInternetGateway: "true"
+          VpcNameTag: !If
+            - HasCiSuffix
+            - !Sub "${ProjectName}-vpc-c-${Environment}-${CiSuffix}"
+            - !Sub "${ProjectName}-vpc-c-${Environment}"
+          Environment: !Ref Environment
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Multi-VPC Private Link VPC-C"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  ######################################
+  # VPC C Public Subnets Nested Stack
+  ######################################
+  PublicSubnetsVpcCNestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested subnets CloudFormation template to create two public subnets in the VPC created by the VPC nested stack, sharing a route table with a default route to the Internet Gateway"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+          - "VpcCNestedStack must complete first so that the VPC and Internet Gateway IDs are available"
+    Properties:
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-subnets/template.yaml"
+      Parameters:
+        VpcId: !GetAtt VpcCNestedStack.Outputs.VPCId
+        VpcName: !If
+          - HasCiSuffix
+          - !Sub "${ProjectName}-vpc-c-${Environment}-${CiSuffix}"
+          - !Sub "${ProjectName}-vpc-c-${Environment}"
+        AvailabilityZones: !Ref SubnetAvailabilityZones
+        SubnetCidrBlocks: !Ref PublicSubnetCidrBlocksVPCC
+        SubnetCount: "2"
+        SubnetQualifier: "public"
+        InternetGatewayId: !GetAtt VpcCNestedStack.Outputs.InternetGatewayId
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Multi-VPC Private Link VPC-C Public Subnets"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  ######################################
+  # VPC C Private Subnets Nested Stack
+  ######################################
+
+  PrivateSubnetsVpcCNestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested subnets CloudFormation template to create two private subnets in the VPC created by the VPC nested stack; private subnets are not associated with the Internet Gateway"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+          - "VpcCNestedStack must complete first so that the VPC ID is available"
+    Properties:
+      TemplateURL: !Sub "https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-subnets/template.yaml"
+      Parameters:
+        VpcId: !GetAtt VpcCNestedStack.Outputs.VPCId
+        VpcName: !If
+          - HasCiSuffix
+          - !Sub "${ProjectName}-vpc-c-${Environment}-${CiSuffix}"
+          - !Sub "${ProjectName}-vpc-c-${Environment}"
+        AvailabilityZones: !Ref SubnetAvailabilityZones
+        SubnetCidrBlocks: !Ref PrivateSubnetCidrBlocksVPCC
+        SubnetCount: "2"
+        SubnetQualifier: "private"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Multi-VPC Private Link"
+        - Key: Component
+          Value: "Multi-VPC Private Link VPC-C Private Subnets"
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
 
 Outputs:
-  S3BucketName:
-    Description: "Name of the S3 bucket"
-    Value: !Ref S3Bucket
-    Export:
-      Name: !Sub "${AWS::StackName}-BucketName"
 
-  S3BucketArn:
-    Description: "ARN of the S3 bucket"
-    Value: !GetAtt S3Bucket.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-BucketArn"
+  VpcId:
+    Description: "ID of the VPC created by the nested stack"
+    Value: !GetAtt VpcANestedStack.Outputs.VPCId
+
+  InternetGatewayId:
+    Description: "ID of the Internet Gateway attached to the VPC created by the nested stack"
+    Value: !GetAtt VpcANestedStack.Outputs.InternetGatewayId
+
+  PublicSubnet1Id:
+    Description: "ID of public subnet 1 created by the nested subnets stack"
+    Value: !GetAtt PublicSubnetsVpcANestedStack.Outputs.SubnetId1
+
+  PublicSubnet1Arn:
+    Description: "ARN of public subnet 1 created by the nested subnets stack"
+    Value: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${PublicSubnetsVpcANestedStack.Outputs.SubnetId1}"
+
+  PublicSubnet2Id:
+    Description: "ID of public subnet 2 created by the nested subnets stack"
+    Value: !GetAtt PublicSubnetsVpcANestedStack.Outputs.SubnetId2
+
+  PublicSubnet2Arn:
+    Description: "ARN of public subnet 2 created by the nested subnets stack"
+    Value: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${PublicSubnetsVpcANestedStack.Outputs.SubnetId2}"
+
+  VpcBId:
+    Description: "ID of VPC B created by the nested stack"
+    Value: !GetAtt VpcBNestedStack.Outputs.VPCId
+
+  VpcBInternetGatewayId:
+    Description: "ID of the Internet Gateway attached to VPC B created by the nested stack"
+    Value: !GetAtt VpcBNestedStack.Outputs.InternetGatewayId
+
+  VpcBPublicSubnet1Id:
+    Description: "ID of VPC B public subnet 1 created by the nested subnets stack"
+    Value: !GetAtt PublicSubnetsVpcBNestedStack.Outputs.SubnetId1
+
+  VpcBPublicSubnet1Arn:
+    Description: "ARN of VPC B public subnet 1 created by the nested subnets stack"
+    Value: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${PublicSubnetsVpcBNestedStack.Outputs.SubnetId1}"
+
+  VpcBPublicSubnet2Id:
+    Description: "ID of VPC B public subnet 2 created by the nested subnets stack"
+    Value: !GetAtt PublicSubnetsVpcBNestedStack.Outputs.SubnetId2
+
+  VpcBPublicSubnet2Arn:
+    Description: "ARN of VPC B public subnet 2 created by the nested subnets stack"
+    Value: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${PublicSubnetsVpcBNestedStack.Outputs.SubnetId2}"
+
+  VpcCId:
+    Description: "ID of VPC C created by the nested stack"
+    Value: !GetAtt VpcCNestedStack.Outputs.VPCId
+
+  VpcCInternetGatewayId:
+    Description: "ID of the Internet Gateway attached to VPC C created by the nested stack"
+    Value: !GetAtt VpcCNestedStack.Outputs.InternetGatewayId
+
+  VpcCPublicSubnet1Id:
+    Description: "ID of VPC C public subnet 1 created by the nested subnets stack"
+    Value: !GetAtt PublicSubnetsVpcCNestedStack.Outputs.SubnetId1
+
+  VpcCPublicSubnet1Arn:
+    Description: "ARN of VPC C public subnet 1 created by the nested subnets stack"
+    Value: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${PublicSubnetsVpcCNestedStack.Outputs.SubnetId1}"
+
+  VpcCPublicSubnet2Id:
+    Description: "ID of VPC C public subnet 2 created by the nested subnets stack"
+    Value: !GetAtt PublicSubnetsVpcCNestedStack.Outputs.SubnetId2
+
+  VpcCPublicSubnet2Arn:
+    Description: "ARN of VPC C public subnet 2 created by the nested subnets stack"
+    Value: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${PublicSubnetsVpcCNestedStack.Outputs.SubnetId2}"
